@@ -264,7 +264,7 @@
             
             logDebug(`WebAuthn: ${webauthnSupport}, PKC: ${pkcSupport}, SPC: ${spcSupport}`);
             
-            return webauthnSupport && pkcSupport;
+            return spcSupport; // Only require SPC support
         }
         
         function logDebug(message) {
@@ -314,8 +314,8 @@
         }
         
         async function registerPasskey() {
-            if (!checkSupport()) {
-                showStatus('register-status', 'WebAuthn not supported in this browser', 'error');
+            if (!('PaymentCredential' in window)) {
+                showStatus('register-status', 'Secure Payment Confirmation not supported in this browser', 'error');
                 return;
             }
             
@@ -326,17 +326,18 @@
             }
             
             try {
-                logDebug('Starting passkey registration...');
-                showStatus('register-status', 'Creating passkey...', 'info');
+                logDebug('Starting SPC payment credential registration...');
+                showStatus('register-status', 'Creating payment credential...', 'info');
                 
                 const userId = new TextEncoder().encode(username);
                 const challenge = crypto.getRandomValues(new Uint8Array(32));
                 
-                const publicKeyCredentialCreationOptions = {
+                // Create payment credential using SPC-specific registration
+                const paymentCredentialCreationOptions = {
                     challenge: challenge,
                     rp: {
                         name: "SPC Test App",
-                        id: "deepakjuspay.github.io"
+                        id: window.location.hostname || "localhost"
                     },
                     user: {
                         id: userId,
@@ -349,8 +350,8 @@
                     ],
                     authenticatorSelection: {
                         authenticatorAttachment: "platform",
-                        userVerification: "preferred",
-                        residentKey: "preferred"
+                        userVerification: "required",
+                        residentKey: "required"
                     },
                     extensions: {
                         payment: {
@@ -360,33 +361,38 @@
                     timeout: 60000
                 };
                 
-                logDebug('Calling navigator.credentials.create...');
+                logDebug('Calling navigator.credentials.create for payment credential...');
                 const credential = await navigator.credentials.create({
-                    publicKey: publicKeyCredentialCreationOptions
+                    publicKey: paymentCredentialCreationOptions
                 });
                 
-                if (credential) {
+                if (credential && credential.response.getClientExtensionResults().payment) {
                     registeredCredentialId = arrayBufferToBase64url(credential.rawId);
-                    logDebug(`Passkey registered successfully! ID: ${registeredCredentialId}`);
+                    logDebug(`Payment credential registered successfully! ID: ${registeredCredentialId}`);
                     
-                    showStatus('register-status', 'Passkey registered successfully!', 'success', 
-                        `Credential ID: ${registeredCredentialId.substring(0, 20)}...`);
+                    showStatus('register-status', 'Payment credential registered successfully!', 'success', 
+                        `Credential ID: ${registeredCredentialId.substring(0, 20)}... (Payment Extension: Enabled)`);
                     
                     // Enable payment button
                     document.getElementById('payment-btn').disabled = false;
                 } else {
-                    throw new Error('Failed to create credential');
+                    throw new Error('Failed to create payment credential or payment extension not supported');
                 }
                 
             } catch (error) {
-                logDebug(`Registration failed: ${error.message}`);
-                showStatus('register-status', 'Registration failed', 'error', error.message);
+                logDebug(`Payment credential registration failed: ${error.message}`);
+                showStatus('register-status', 'Payment credential registration failed', 'error', error.message);
             }
         }
         
         async function confirmPayment() {
+            if (!('PaymentCredential' in window)) {
+                showStatus('payment-status', 'Secure Payment Confirmation not supported in this browser', 'error');
+                return;
+            }
+            
             if (!registeredCredentialId) {
-                showStatus('payment-status', 'Please register a passkey first', 'error');
+                showStatus('payment-status', 'Please register a payment credential first', 'error');
                 return;
             }
             
@@ -399,71 +405,77 @@
             }
             
             try {
-                logDebug('Starting payment confirmation...');
-                showStatus('payment-status', 'Confirming payment...', 'info');
+                logDebug('Starting Secure Payment Confirmation...');
+                showStatus('payment-status', 'Confirming payment with SPC...', 'info');
                 
                 const challenge = crypto.getRandomValues(new Uint8Array(32));
                 
-                // Check if SPC is available
-                if ('PaymentCredential' in window) {
-                    logDebug('Using Secure Payment Confirmation API');
-                    
-                    const paymentCredentialRequestOptions = {
-                        challenge: challenge,
-                        credentialIds: [base64urlToArrayBuffer(registeredCredentialId)],
-                        timeout: 60000,
-                        payeeName: merchant,
-                        payeeOrigin: window.location.origin,
-                        topOrigin: window.location.origin,
-                        instrument: {
-                            displayName: 'Test Payment Method',
-                            icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNCIgZmlsbD0iIzQyODVmNCIvPgo8cGF0aCBkPSJNMTYgOGw0IDhoLThoNHoiIGZpbGw9IndoaXRlIi8+Cjwvc3ZnPgo='
-                        }
-                    };
-                    
-                    const paymentCredential = await navigator.credentials.get({
-                        payment: paymentCredentialRequestOptions
-                    });
-                    
-                    if (paymentCredential) {
-                        logDebug('Payment confirmed with SPC!');
-                        showStatus('payment-status', 'Payment confirmed successfully!', 'success',
-                            `Amount: $${amount} to ${merchant}`);
+                // Use Secure Payment Confirmation API
+                const paymentCredentialRequestOptions = {
+                    challenge: challenge,
+                    credentialIds: [base64urlToArrayBuffer(registeredCredentialId)],
+                    timeout: 60000,
+                    payeeName: merchant,
+                    payeeOrigin: window.location.origin,
+                    topOrigin: window.location.origin,
+                    instrument: {
+                        displayName: `Payment to ${merchant}`,
+                        icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iIzRjYWY1MCIvPgo8cGF0aCBkPSJNMTYgOEwxMiAyMEgyMEwxNiA4WiIgZmlsbD0id2hpdGUiLz4KPHA+PHRleHQgeD0iMTYiIHk9IjI2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSJ3aGl0ZSIgZm9udC1zaXplPSI4Ij4kPC90ZXh0Pgo8L3N2Zz4K'
+                    },
+                    total: {
+                        currency: 'USD',
+                        value: amount
                     }
+                };
+                
+                logDebug('Calling navigator.credentials.get with payment options...');
+                logDebug(`Payment details: ${merchant}, ${amount}`);
+                
+                const paymentCredential = await navigator.credentials.get({
+                    payment: paymentCredentialRequestOptions
+                });
+                
+                if (paymentCredential) {
+                    logDebug('Payment confirmed successfully with SPC!');
+                    logDebug(`Credential ID: ${arrayBufferToBase64url(paymentCredential.rawId)}`);
                     
+                    showStatus('payment-status', 'Payment confirmed with SPC!', 'success',
+                        `✅ Amount: ${amount} to ${merchant}<br>🔐 Authenticated with payment credential`);
                 } else {
-                    logDebug('SPC not available, using regular WebAuthn');
-                    
-                    const publicKeyCredentialRequestOptions = {
-                        challenge: challenge,
-                        allowCredentials: [{
-                            type: 'public-key',
-                            id: base64urlToArrayBuffer(registeredCredentialId)
-                        }],
-                        userVerification: 'preferred',
-                        timeout: 60000
-                    };
-                    
-                    const assertion = await navigator.credentials.get({
-                        publicKey: publicKeyCredentialRequestOptions
-                    });
-                    
-                    if (assertion) {
-                        logDebug('Payment confirmed with WebAuthn!');
-                        showStatus('payment-status', 'Payment confirmed successfully!', 'success',
-                            `Amount: $${amount} to ${merchant} (via WebAuthn)`);
-                    }
+                    throw new Error('Payment credential verification failed');
                 }
                 
             } catch (error) {
-                logDebug(`Payment confirmation failed: ${error.message}`);
-                showStatus('payment-status', 'Payment confirmation failed', 'error', error.message);
+                logDebug(`Secure Payment Confirmation failed: ${error.message}`);
+                
+                // Provide specific error messages for common SPC issues
+                let errorMessage = error.message;
+                if (error.name === 'NotSupportedError') {
+                    errorMessage = 'Secure Payment Confirmation is not supported or enabled';
+                } else if (error.name === 'SecurityError') {
+                    errorMessage = 'Security requirements not met for SPC';
+                } else if (error.name === 'NotAllowedError') {
+                    errorMessage = 'User cancelled payment or authentication failed';
+                }
+                
+                showStatus('payment-status', 'Secure Payment Confirmation failed', 'error', errorMessage);
             }
         }
         
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', function() {
-            logDebug('Page loaded, checking browser support...');
+            logDebug('Page loaded, checking SPC support...');
+            
+            if (!('PaymentCredential' in window)) {
+                logDebug('❌ PaymentCredential not available - SPC not supported');
+                showStatus('register-status', 'Secure Payment Confirmation not supported', 'error', 
+                    'This browser does not support the PaymentCredential API required for SPC');
+                showStatus('payment-status', 'SPC not available', 'error', 
+                    'Please use a browser that supports Secure Payment Confirmation');
+            } else {
+                logDebug('✅ PaymentCredential available - SPC supported');
+            }
+            
             checkSupport();
         });
     </script>
